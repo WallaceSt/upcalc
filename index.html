@@ -8,101 +8,142 @@
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <style>[x-cloak]{display:none!important}</style>
   <script>
+    // Multiplicadores comerciais. A tarifa Standard é usada como referência.
+    const MULTIPLIERS = Object.freeze({
+      Standard: 1,
+      Luxo: 1.2,
+      Master: 1.3,
+      VIP: 1.6,
+      'Família': 1.95,
+    });
+
+    const ROOM_CATEGORIES = Object.freeze([
+      { name: 'Standard', max: 3, description: 'Até 3 hóspedes' },
+      { name: 'Luxo', max: 4, description: 'Até 4 hóspedes' },
+      { name: 'Master', max: 4, description: 'Até 4 hóspedes' },
+      { name: 'VIP', max: 3, description: 'Até 3 hóspedes' },
+      { name: 'Família', max: 5, description: 'Até 5 hóspedes' },
+    ]);
+
+    const currencyFormatter = new Intl.NumberFormat('pt-BR', {
+      style: 'currency', currency: 'BRL',
+    });
+
+    /** Converte o preço da categoria informada para sua base Standard. */
+    function findStandardPrice(room, dailyRate, payingGuests) {
+      switch (room) {
+        case 'Standard':
+          return dailyRate;
+        case 'Luxo':
+          // Luxo com 4 pagantes tem uma regra de conversão específica.
+          return payingGuests === 4
+            ? dailyRate / 1.6 / MULTIPLIERS.Luxo
+            : dailyRate / MULTIPLIERS.Luxo;
+        case 'Master':
+          return payingGuests === 2
+            ? dailyRate / MULTIPLIERS.Master / MULTIPLIERS.Master
+            : dailyRate / MULTIPLIERS.Master;
+        case 'VIP':
+          return dailyRate / MULTIPLIERS.VIP;
+        case 'Família':
+          // Regras inversas para 2, 3 e 4 hóspedes pagantes.
+          const occupancyFactor = { 2: 1, 3: 1.3, 4: 1.6 }[payingGuests];
+          return dailyRate / MULTIPLIERS['Família'] * occupancyFactor;
+        default:
+          return NaN;
+      }
+    }
+
+    /** Retorna todas as tarifas conforme as fórmulas comerciais fornecidas. */
+    function calculatePrices(room, dailyRate, payingGuests) {
+      const standard = findStandardPrice(room, dailyRate, payingGuests);
+      const prices = {
+        Standard: standard,
+        Luxo: standard * MULTIPLIERS.Luxo,
+        Master: standard * MULTIPLIERS.Master,
+        VIP: standard * MULTIPLIERS.VIP,
+        'Família': standard * MULTIPLIERS['Família'],
+      };
+
+      // Master com 2 pagantes aplica 30% duas vezes.
+      if (payingGuests === 2) {
+        prices.Master *= MULTIPLIERS.Master;
+      }
+
+      // Para 3 pagantes, Família parte da tarifa Standard de 2 pagantes.
+      if (payingGuests === 3) {
+        prices['Família'] = standard / 1.3 * MULTIPLIERS['Família'];
+      }
+
+      // Exceções originais para 4 pagantes nas categorias Luxo e Master.
+      if (payingGuests === 4 && room === 'Luxo') {
+        prices.Master = dailyRate / MULTIPLIERS.Luxo * MULTIPLIERS.Master;
+      }
+      if (payingGuests === 4 && room === 'Master') {
+        prices['Família'] = standard / 1.6 * MULTIPLIERS['Família'];
+      }
+
+      // O valor de origem é sempre o digitado (sem variações de arredondamento).
+      prices[room] = dailyRate;
+      return prices;
+    }
+
     document.addEventListener('alpine:init', () => {
       Alpine.data('calculatorApp', () => ({
         dailyRate: '',
         guests: 2,
         freeGuest: false,
         currentRoom: 'Standard',
-        rooms: [
-          { name: 'Standard', max: 3, description: 'Até 3 hóspedes' },
-          { name: 'Luxo', max: 4, description: 'Até 4 hóspedes' },
-          { name: 'Master', max: 4, description: 'Até 4 hóspedes' },
-          { name: 'VIP', max: 3, description: 'Até 3 hóspedes' },
-          { name: 'Família', max: 5, description: 'Até 5 hóspedes' },
-        ],
-        percentages: { Standard: 1, Luxo: 1.2, Master: 1.3, VIP: 1.6, 'Família': 1.95 },
+        rooms: ROOM_CATEGORIES,
 
         get payingGuests() {
-          return Number(this.guests) - (this.freeGuest ? 1 : 0);
+          return Number(this.guests) - Number(this.freeGuest);
         },
+
         get error() {
-          const price = Number(this.dailyRate);
-          const guests = Number(this.guests);
+          const rate = Number(this.dailyRate);
+          const total = Number(this.guests);
+          const room = this.rooms.find(item => item.name === this.currentRoom);
+
           if (this.dailyRate === '') return 'Informe o valor da diária para visualizar as sugestões.';
-          if (!Number.isFinite(price) || price <= 0) return 'Informe um preço maior que zero.';
-          if (!Number.isInteger(guests) || guests < 2 || guests > 5) return 'Informe entre 2 e 5 hóspedes.';
-          const room = this.rooms.find(r => r.name === this.currentRoom);
+          if (!Number.isFinite(rate) || rate <= 0) return 'Informe um preço maior que zero.';
+          if (!Number.isInteger(total) || total < 2 || total > 5) return 'Informe entre 2 e 5 hóspedes.';
           if (!room) return 'Selecione uma categoria válida.';
-          if (guests > room.max) return `${this.currentRoom} acomoda no máximo ${room.max} hóspedes.`;
+          if (total > room.max) return `${room.name} acomoda no máximo ${room.max} hóspedes.`;
           if (this.payingGuests < 2) return 'As fórmulas fornecidas começam em 2 hóspedes pagantes.';
-          if (this.currentRoom === 'Família') return 'Falta a fórmula inversa para calcular a partir de uma diária da categoria Família.';
-          if (this.payingGuests === 4 && !['Luxo', 'Master'].includes(this.currentRoom)) {
-            return 'Para 4 hóspedes pagantes, há fórmulas de origem apenas para Luxo e Master.';
-          }
           if (this.payingGuests > 4) return 'Não há fórmula informada para 5 hóspedes pagantes.';
+          if (this.payingGuests === 4 && !['Luxo', 'Master', 'Família'].includes(this.currentRoom)) {
+            return 'Para 4 hóspedes pagantes, há fórmulas de origem apenas para Luxo, Master e Família.';
+          }
           return '';
         },
+
         get prices() {
-          if (this.error) return null;
-          const price = Number(this.dailyRate);
-          const p = this.payingGuests;
-          let standard;
-          let master;
-          let family;
-
-          // A categoria de origem determina como recuperar a referência Standard.
-          switch (this.currentRoom) {
-            case 'Standard':
-              standard = price;
-              break;
-            case 'Luxo':
-              standard = p === 4 ? price / 1.6 / 1.2 : price / 1.2;
-              break;
-            case 'Master':
-              standard = p === 2 ? price / 1.3 / 1.3 : price / 1.3;
-              break;
-            case 'VIP':
-              standard = price / 1.6;
-              break;
-          }
-
-          // Regras especiais transcritas dos exemplos em Python.
-          if (p === 4 && this.currentRoom === 'Luxo') {
-            master = (price / 1.2) * 1.3;
-            family = standard * 1.95;
-          } else if (p === 4 && this.currentRoom === 'Master') {
-            master = price;
-            family = (standard / 1.6) * 1.95;
-          } else {
-            master = standard * 1.3 * (p === 2 ? 1.3 : 1);
-            family = (p === 3 ? standard / 1.3 : standard) * 1.95;
-          }
-
-          return {
-            Standard: standard,
-            Luxo: standard * 1.2,
-            Master: master,
-            VIP: standard * 1.6,
-            'Família': family,
-          };
+          return this.error ? null : calculatePrices(
+            this.currentRoom, Number(this.dailyRate), this.payingGuests
+          );
         },
+
         get recommendations() {
-          if (!this.prices) return [];
+          const prices = this.prices;
+          if (!prices) return [];
           return this.rooms
             .filter(room => room.max >= Number(this.guests))
             .map(room => ({
               ...room,
-              price: room.name === this.currentRoom ? Number(this.dailyRate) : this.prices[room.name],
+              price: prices[room.name],
               current: room.name === this.currentRoom,
             }));
         },
+
         formatBRL(value) {
-          return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+          return currencyFormatter.format(value);
         },
+
         difference(value) {
           return value - Number(this.dailyRate);
         },
+
         reset() {
           this.dailyRate = '';
           this.guests = 2;
@@ -115,7 +156,7 @@
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-900" x-data="calculatorApp()">
   <header class="bg-slate-950 text-white">
-    <div class="mx-auto flex max-w-6xl items-center justify-between px-5 py-5">
+    <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5">
       <div>
         <div class="text-xs font-semibold tracking-[.2em] text-sky-300 uppercase">Hospedagem · Recepção</div>
         <h1 class="text-xl font-bold sm:text-2xl">Calculadora de upselling</h1>
@@ -124,8 +165,8 @@
     </div>
   </header>
 
-  <main class="mx-auto grid max-w-6xl gap-6 px-5 py-8 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
-    <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+  <main class="mx-auto grid w-full max-w-6xl gap-5 px-4 py-5 sm:gap-6 sm:px-6 sm:py-8 lg:grid-cols-[minmax(290px,350px)_minmax(0,1fr)] lg:items-start">
+    <section class="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
       <div class="mb-6">
         <h2 class="text-lg font-bold">Dados da reserva</h2>
         <p class="mt-1 text-sm text-slate-500">Informe o valor atual e a ocupação da reserva.</p>
@@ -133,12 +174,12 @@
       <form class="space-y-5" @submit.prevent>
         <div>
           <label for="dailyRate" class="mb-1.5 block text-sm font-semibold">Preço atual da diária (R$)</label>
-          <input id="dailyRate" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Ex.: 657,37" x-model.number="dailyRate"
-            class="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+          <input id="dailyRate" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Ex.: 657.37" x-model.number="dailyRate"
+            class="w-full min-w-0 rounded-xl border border-slate-300 bg-white px-4 py-3 text-base outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
         </div>
         <div>
           <label for="guests" class="mb-1.5 block text-sm font-semibold">Total de hóspedes</label>
-          <select id="guests" x-model.number="guests" class="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+          <select id="guests" x-model.number="guests" class="w-full min-w-0 rounded-xl border border-slate-300 bg-white px-4 py-3 text-base outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
             <template x-for="count in [2,3,4,5]" :key="count"><option :value="count" x-text="`${count} hóspedes`"></option></template>
           </select>
         </div>
@@ -148,7 +189,7 @@
         </label>
         <div>
           <label for="currentRoom" class="mb-1.5 block text-sm font-semibold">Categoria atual</label>
-          <select id="currentRoom" x-model="currentRoom" class="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+          <select id="currentRoom" x-model="currentRoom" class="w-full min-w-0 rounded-xl border border-slate-300 bg-white px-4 py-3 text-base outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
             <template x-for="room in rooms" :key="room.name"><option :value="room.name" x-text="room.name"></option></template>
           </select>
         </div>
@@ -176,7 +217,7 @@
 
       <div x-show="!error" x-cloak class="grid gap-4 sm:grid-cols-2">
         <template x-for="room in recommendations" :key="room.name">
-          <article class="rounded-2xl border bg-white p-5 shadow-sm transition" :class="room.current ? 'border-sky-400 ring-2 ring-sky-100' : 'border-slate-200'">
+          <article class="min-w-0 rounded-2xl border bg-white p-4 shadow-sm transition sm:p-5" :class="room.current ? 'border-sky-400 ring-2 ring-sky-100' : 'border-slate-200'">
             <div class="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h3 class="text-lg font-bold" x-text="room.name"></h3>
@@ -184,7 +225,7 @@
               </div>
               <span x-show="room.current" class="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800">Atual</span>
             </div>
-            <p class="text-2xl font-extrabold tracking-tight tabular-nums" x-text="formatBRL(room.price)"></p>
+            <p class="break-words text-xl font-extrabold tracking-tight tabular-nums sm:text-2xl" x-text="formatBRL(room.price)"></p>
             <div class="mt-4 border-t border-slate-100 pt-3 text-sm">
               <span x-show="room.current" class="font-medium text-slate-500">Preço informado da reserva</span>
               <span x-show="!room.current" :class="difference(room.price) >= 0 ? 'text-emerald-700' : 'text-rose-700'">
@@ -195,7 +236,7 @@
           </article>
         </template>
       </div>
-      <p class="mt-5 text-xs leading-relaxed text-slate-500">A capacidade usa o total de hóspedes, incluindo o gratuito. Os valores são estimativas com base nas regras fornecidas, não tarifas oficiais da hospedagem. A categoria Família aparece como destino de upselling; não há fórmula fornecida para usá-la como categoria de origem.</p>
+      <p class="mt-5 text-xs leading-relaxed text-slate-500">A capacidade usa o total de hóspedes, incluindo o gratuito. Os valores são estimativas com base nas regras fornecidas, não tarifas oficiais da hospedagem. A categoria Família também pode ser a origem da tarifa para 2, 3 ou 4 hóspedes pagantes. Não há regras fornecidas para 5 pagantes.</p>
     </section>
   </main>
 </body>
